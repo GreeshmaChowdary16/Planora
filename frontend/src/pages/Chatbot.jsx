@@ -1,0 +1,357 @@
+import React, { useState, useEffect } from 'react';
+import { Bot, Send, User, LayoutDashboard, MessageSquare, Settings, LogOut, Code, Map, Cpu, Monitor, Mic, MicOff, Wrench, ListOrdered, Sparkles } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../utils/api';
+
+export default function Chatbot() {
+  const [input, setInput] = useState('');
+  const navigate = useNavigate();
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      sender: 'ai',
+      text: "Hello! I'm Planora, your AI Project Assistant. To get started, is your idea a Hardware project or a Software project?",
+      options: ['Hardware Project', 'Software Project']
+    }
+  ]);
+
+  const [isTyping, setIsTyping] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [recognition, setRecognition] = useState(null);
+  
+  const [projectType, setProjectType] = useState(null);
+  const [savedProjects, setSavedProjects] = useState([]);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+    } else {
+      fetchUserData();
+      fetchSavedProjects();
+    }
+  }, [navigate]);
+
+  const fetchUserData = async () => {
+    try {
+      const data = await api.get('/users/profile');
+      setUser(data);
+    } catch (err) {
+      console.error('Error fetching user:', err);
+    }
+  };
+
+  const fetchSavedProjects = async () => {
+    try {
+      const data = await api.get('/projects');
+      setSavedProjects(data);
+    } catch (err) {
+      console.error('Error fetching projects:', err);
+    }
+  };
+
+  useEffect(() => {
+    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+
+      rec.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+          else interimTranscript += event.results[i][0].transcript;
+        }
+        if (finalTranscript) setInput((prev) => prev + (prev ? ' ' : '') + finalTranscript);
+      };
+
+      rec.onerror = (event) => { console.error(event); setIsListening(false); };
+      rec.onend = () => setIsListening(false);
+      setRecognition(rec);
+    }
+  }, []);
+
+  const toggleListen = () => {
+    if (isListening) { recognition?.stop(); setIsListening(false); } 
+    else {
+      if (recognition) { try { recognition.start(); setIsListening(true); } catch(e){} } 
+      else alert("Speech recognition is not supported in this browser.");
+    }
+  };
+
+  const submitMessage = async (messageText, isOption = false) => {
+    const newMsg = { id: Date.now(), sender: 'user', text: messageText };
+    setMessages((prev) => [...prev, newMsg]);
+    setInput('');
+    setIsTyping(true);
+
+    if (!projectType && (messageText.toLowerCase().includes('hardware') || messageText.toLowerCase().includes('software'))) {
+      const type = messageText.toLowerCase().includes('hardware') ? 'hardware' : 'software';
+      setProjectType(type);
+      setTimeout(() => {
+        setIsTyping(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now() + 1,
+            sender: 'ai',
+            text: `Awesome, a ${type} project! Please describe what exactly you want to build. You can also ask me for name suggestions if you don't have a title yet!`
+          }
+        ]);
+      }, 1000);
+      return;
+    }
+
+    try {
+      const contextualMessage = projectType ? `[${projectType} project] ${messageText}` : messageText;
+      
+      const data = await api.post('/chat/message', { message: contextualMessage });
+      
+      setIsTyping(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          sender: 'ai',
+          text: data.text,
+          resultData: data.result
+        }
+      ]);
+    } catch (err) {
+      console.error(err);
+      setIsTyping(false);
+      setMessages((prev) => [...prev, { id: Date.now() + 1, sender: 'ai', text: "Error connecting to AI server. Please make sure the backend is running." }]);
+    }
+  };
+
+  const handleSend = (e) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+    if (isListening) { recognition?.stop(); setIsListening(false); }
+    submitMessage(input);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    navigate('/login');
+  };
+
+  const handleSaveProject = async (resultData) => {
+    try {
+      await api.post('/projects', {
+        title: resultData.title,
+        description: "Project generated by Planora AI",
+        techStack: resultData.stack,
+        roadmap: resultData.roadmap,
+        components: resultData.components,
+        procedure: resultData.procedure
+      });
+      alert('Project saved successfully!');
+      fetchSavedProjects(); // Refresh the list
+    } catch (err) {
+      console.error(err);
+      alert('Error saving project.');
+    }
+  };
+
+  return (
+    <div className="app-layout" style={{ width: '100vw' }}>
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <div className="brand-logo" style={{ width: '30px', height: '30px', fontSize: '14px' }}><Bot size={16} color="white" /></div>
+          <span className="brand-name" style={{ fontSize: '1.2rem' }}>Planora</span>
+        </div>
+        <div className="sidebar-section-title">Menu</div>
+        <div className="sidebar-item active"><MessageSquare size={18} /> New Project Plan</div>
+        <div className="sidebar-item"><LayoutDashboard size={18} /> My Projects</div>
+        <div className="sidebar-section-title" style={{ marginTop: 'var(--space-xl)' }}>History</div>
+        {savedProjects.map(proj => (
+          <div key={proj._id} className="sidebar-item" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {proj.title}
+          </div>
+        ))}
+        {savedProjects.length === 0 && <div style={{ padding: '10px var(--space-md)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>No saved projects yet.</div>}
+        <div style={{ marginTop: 'auto' }}>
+          <div className="sidebar-item" style={{ borderTop: '1px solid var(--border)', paddingTop: 'var(--space-md)', marginTop: '0', marginBottom: 'var(--space-sm)', cursor: 'default', background: 'transparent' }}>
+            <div className="message-avatar" style={{ width: '24px', height: '24px' }}><User size={14} /></div>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{user ? user.fullName : 'Loading...'}</span>
+          </div>
+          <div className="sidebar-item"><Settings size={18} /> Settings</div>
+          <div className="sidebar-item" onClick={handleLogout}><LogOut size={18} /> Logout</div>
+        </div>
+      </div>
+
+      <div className="chat-layout">
+        <div className="chat-header">
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+            <span className="badge badge-purple">Planning Mode</span>
+            <span>New AI Project</span>
+          </div>
+          <div className="difficulty-badge beginner" style={{ fontSize: '0.75rem', padding: '4px 10px' }}>AI Ready</div>
+        </div>
+
+        <div className="chat-messages">
+          {messages.map((msg) => (
+            <div key={msg.id} className={`message ${msg.sender}`}>
+              <div className="message-avatar">
+                {msg.sender === 'ai' ? <Bot size={20} color="white" /> : <User size={18} />}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', width: '100%' }}>
+                <div className="message-bubble">{msg.text}</div>
+                
+                {msg.options && !projectType && (
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                    <button className="btn btn-secondary" onClick={() => submitMessage('Hardware Project', true)} style={{ flex: 1, justifyContent: 'center' }}>
+                      <Cpu size={16} /> Hardware Project
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => submitMessage('Software Project', true)} style={{ flex: 1, justifyContent: 'center' }}>
+                      <Monitor size={16} /> Software Project
+                    </button>
+                  </div>
+                )}
+                
+                {msg.resultData && (
+                  <div className="result-section" style={{ animation: 'fadeInUp 0.5s ease' }}>
+                    <div className="result-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <Code size={18} className="result-header-icon" color="var(--accent-cyan)" />
+                        <span className="result-header-title">{msg.resultData.title}</span>
+                      </div>
+                      <button 
+                        className="btn btn-secondary" 
+                        style={{ padding: '4px 12px', fontSize: '0.75rem', height: 'auto' }}
+                        onClick={() => handleSaveProject(msg.resultData)}
+                      >
+                        <Sparkles size={12} style={{ marginRight: '5px' }} /> Save to My Projects
+                      </button>
+                    </div>
+
+                    {/* NAME SUGGESTIONS */}
+                    {msg.resultData.nameSuggestions && (
+                      <div className="result-body">
+                        <ul style={{ listStyleType: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {msg.resultData.nameSuggestions.map((name, i) => (
+                            <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                              <Sparkles size={16} color="var(--accent-cyan)" /> {name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* TECH STACK */}
+                    {msg.resultData.stack && (
+                      <div className="result-body" style={{ borderTop: msg.resultData.nameSuggestions ? '1px solid var(--border)' : 'none' }}>
+                        <div className="tech-badges">
+                          {msg.resultData.stack.map(tech => (
+                            <span key={tech} className="tech-badge">{tech}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* COMPONENTS */}
+                    {msg.resultData.components && (
+                      <>
+                        <div className="result-header" style={{ borderTop: '1px solid var(--border)' }}>
+                          <Cpu size={18} className="result-header-icon" color="#00d466" />
+                          <span className="result-header-title" style={{ color: '#00d466' }}>Required Components</span>
+                        </div>
+                        <div className="result-body">
+                          <ul style={{ listStyleType: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {msg.resultData.components.map((comp, i) => (
+                              <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-secondary)' }}>
+                                <Wrench size={14} /> {comp}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </>
+                    )}
+
+                    {/* PROCEDURE */}
+                    {msg.resultData.procedure && (
+                      <>
+                        <div className="result-header" style={{ borderTop: '1px solid var(--border)' }}>
+                          <ListOrdered size={18} className="result-header-icon" color="var(--accent-pink)" />
+                          <span className="result-header-title" style={{ color: 'var(--accent-pink)' }}>Build Procedure</span>
+                        </div>
+                        <div className="result-body">
+                          <div className="roadmap" style={{ gap: '10px' }}>
+                            {msg.resultData.procedure.map((step, i) => (
+                              <div key={i} style={{ padding: '10px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                <span style={{ color: 'var(--text-primary)', fontSize: '0.9rem' }}>{step}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    
+                    {/* ROADMAP */}
+                    {msg.resultData.roadmap && (
+                      <>
+                        <div className="result-header" style={{ borderTop: '1px solid var(--border)' }}>
+                          <Map size={18} className="result-header-icon" color="var(--accent-purple)" />
+                          <span className="result-header-title" style={{ color: 'var(--accent-purple)' }}>Development Roadmap</span>
+                        </div>
+                        <div className="result-body">
+                          <div className="roadmap">
+                            {msg.resultData.roadmap.map(step => (
+                              <div key={step.step} className="roadmap-step">
+                                <div className="roadmap-step-num">{step.step}</div>
+                                <div className="roadmap-step-content">
+                                  <div className="roadmap-step-title">{step.title}</div>
+                                  <div className="roadmap-step-desc">{step.desc}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {isTyping && (
+            <div className="message ai">
+              <div className="message-avatar"><Bot size={20} color="white" /></div>
+              <div className="typing-indicator"><div className="typing-dot"></div><div className="typing-dot"></div><div className="typing-dot"></div></div>
+            </div>
+          )}
+        </div>
+
+        <div className="chat-input-area">
+          <form className="chat-input-wrapper" onSubmit={handleSend} style={{ position: 'relative' }}>
+            <textarea 
+              className="chat-input"
+              placeholder={isListening ? "Listening... Speak your idea now" : "Describe your project idea here..."}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
+              rows={1}
+              style={{ paddingRight: '45px' }}
+            />
+            <button type="button" onClick={toggleListen} style={{ background: 'none', border: 'none', cursor: 'pointer', color: isListening ? '#ff4444' : 'var(--text-secondary)', marginRight: 'var(--space-sm)', animation: isListening ? 'pulse 1.5s infinite' : 'none' }}>
+              {isListening ? <MicOff size={22} /> : <Mic size={22} />}
+            </button>
+            <button type="submit" className="chat-send-btn" disabled={!input.trim() || isTyping}>
+              <Send size={18} />
+            </button>
+            {isListening && <style>{`@keyframes pulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } 100% { transform: scale(1); opacity: 1; } }`}</style>}
+          </form>
+          <div style={{ textAlign: 'center', marginTop: 'var(--space-sm)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Planora AI can make mistakes. Consider verifying important technical decisions.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
